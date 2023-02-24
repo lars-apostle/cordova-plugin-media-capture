@@ -15,18 +15,7 @@
  KIND, either express or implied.  See the License for the
  specific language governing permissions and limitations
  under the License.
- 
- 
- This plugin converts the captured mov file to a medium quality mp4 file.
- Modified by R.E. Moore Jr.
- 07-13-2016
- 
- Last revised: 07-13-2016
- 
- 
  */
-
-
 
 #import "CDVCapture.h"
 #import "CDVFile.h"
@@ -69,17 +58,17 @@
 - (BOOL)prefersStatusBarHidden {
     return YES;
 }
-    
+
 - (UIViewController*)childViewControllerForStatusBarHidden {
     return nil;
 }
-    
+
 - (void)viewWillAppear:(BOOL)animated {
     SEL sel = NSSelectorFromString(@"setNeedsStatusBarAppearanceUpdate");
     if ([self respondsToSelector:sel]) {
         [self performSelector:sel withObject:nil afterDelay:0];
     }
-    
+
     [super viewWillAppear:animated];
 }
 
@@ -152,6 +141,7 @@
             pickerController = [[CDVImagePicker alloc] init];
         }
 
+        [self showAlertIfAccessProhibited];
         pickerController.delegate = self;
         pickerController.sourceType = UIImagePickerControllerSourceTypeCamera;
         pickerController.allowsEditing = NO;
@@ -168,7 +158,7 @@
         }*/
         // CDVImagePicker specific property
         pickerController.callbackId = callbackId;
-
+        pickerController.modalPresentationStyle = UIModalPresentationCurrentContext;
         [self.viewController presentViewController:pickerController animated:YES completion:nil];
     }
 }
@@ -258,6 +248,8 @@
         [self.commandDelegate sendPluginResult:result callbackId:callbackId];
         pickerController = nil;
     } else {
+        [self showAlertIfAccessProhibited];
+
         pickerController.delegate = self;
         pickerController.sourceType = UIImagePickerControllerSourceTypeCamera;
         pickerController.allowsEditing = NO;
@@ -280,26 +272,72 @@
         }
         // CDVImagePicker specific property
         pickerController.callbackId = callbackId;
-
+        pickerController.modalPresentationStyle = UIModalPresentationCurrentContext;
         [self.viewController presentViewController:pickerController animated:YES completion:nil];
     }
 }
 
-/*
-    - (CDVPluginResult*)processVideo:(NSString*)moviePath forCallbackId:(NSString*)callbackId
-*/
-
-- (void)processVideo:(NSString*)moviePath forCallbackId:(NSString*)callbackId
+- (CDVPluginResult*)processVideo:(NSString*)moviePath forCallbackId:(NSString*)callbackId
 {
-	
-	// create MediaFile object
-	NSDictionary* fileDict = [self getMediaDictionaryFromPath:moviePath ofType:nil];
-	NSArray* fileArray = [NSArray arrayWithObject:fileDict];
-	
-	CDVPluginResult* result = nil;
-	result = [CDVPluginResult  resultWithStatus:CDVCommandStatus_OK messageAsArray:fileArray];
-	
-	[self.commandDelegate sendPluginResult:result callbackId:callbackId];
+    // save the movie to photo album (only avail as of iOS 3.1)
+
+    /* don't need, it should automatically get saved
+     NSLog(@"can save %@: %d ?", moviePath, UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(moviePath));
+    if (&UIVideoAtPathIsCompatibleWithSavedPhotosAlbum != NULL && UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(moviePath) == YES) {
+        NSLog(@"try to save movie");
+        UISaveVideoAtPathToSavedPhotosAlbum(moviePath, nil, nil, nil);
+        NSLog(@"finished saving movie");
+    }*/
+    // create MediaFile object
+    NSDictionary* fileDict = [self getMediaDictionaryFromPath:moviePath ofType:nil];
+    NSArray* fileArray = [NSArray arrayWithObject:fileDict];
+
+    return [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:fileArray];
+}
+
+- (void)showAlertIfAccessProhibited
+{
+    if (![self hasCameraAccess]) {
+        [self showPermissionsAlert];
+    }
+}
+
+- (BOOL)hasCameraAccess
+{
+    AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
+
+    return status != AVAuthorizationStatusDenied && status != AVAuthorizationStatusRestricted;
+}
+
+- (void)showPermissionsAlert
+{
+    UIAlertController *alertController = [UIAlertController alertControllerWithTitle:[[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleDisplayName"]
+        message:NSLocalizedString(@"Access to the camera has been prohibited; please enable it in the Settings app to continue.", nil)
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alertController addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", nil)
+    style:UIAlertActionStyleDefault
+    handler:^(UIAlertAction * action)
+    {
+        [self returnNoPermissionError];
+    }]];
+    [alertController addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Settings", nil)
+    style:UIAlertActionStyleDefault
+    handler:^(UIAlertAction * action)
+    {
+        [[UIApplication sharedApplication] openURL:[NSURL URLWithString:UIApplicationOpenSettingsURLString]options:@{} completionHandler:nil];
+        [self returnNoPermissionError];
+    }]];
+    [self.viewController presentViewController:alertController animated:YES completion:^{}];
+}
+
+- (void)returnNoPermissionError
+{
+    CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageToErrorObject:CAPTURE_PERMISSION_DENIED];
+
+    [[pickerController presentingViewController] dismissViewControllerAnimated:YES completion:nil];
+    [self.commandDelegate sendPluginResult:result callbackId:pickerController.callbackId];
+    pickerController = nil;
+    self.inUse = NO;
 }
 
 - (void)getMediaModes:(CDVInvokedUrlCommand*)command
@@ -336,7 +374,7 @@
                 NSDictionary* mov = [NSDictionary dictionaryWithObjectsAndKeys:
                     [NSNumber numberWithInt:0], kW3CMediaFormatHeight,
                     [NSNumber numberWithInt:0], kW3CMediaFormatWidth,
-					@"video/mp4",kW3CMediaModeType,
+                    @"video/quicktime", kW3CMediaModeType,
                     nil];
                 movieArray = [NSArray arrayWithObject:mov];
             }
@@ -347,7 +385,7 @@
         movieArray ? (NSObject*)                          movieArray:[NSNull null], @"video",
         audioArray ? (NSObject*)                          audioArray:[NSNull null], @"audio",
         nil];
-    
+
     NSData* jsonData = [NSJSONSerialization dataWithJSONObject:modes options:0 error:nil];
     NSString* jsonStr = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
 
@@ -486,83 +524,6 @@
     return fileDict;
 }
 
-- (void)conversionFailedOrCanceled:(NSString*)callbackId {
-	CDVPluginResult* result = nil;
-	result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageToErrorObject:CAPTURE_INTERNAL_ERR];
-	[self.commandDelegate sendPluginResult:result callbackId:callbackId];
-};
-
-
-
-
-- (void)convertVideoToMpeg:(NSString*)videoPath withCallbackId:(NSString*)callbackId {
-	// MP4 Conversion using the AVFoundation Framework
-	
-	[self.commandDelegate runInBackground:^{
-
-		// Create the asset url with the video file
-	
-		NSURL *videoURL = [[NSURL alloc] initFileURLWithPath:videoPath];
-	
-		AVURLAsset *avAsset = [AVURLAsset URLAssetWithURL:videoURL options:nil];
-		NSArray *compatiblePresets = [AVAssetExportSession exportPresetsCompatibleWithAsset:avAsset];
-
-		// Check if video is supported for conversion or not
-		if ([compatiblePresets containsObject:AVAssetExportPresetMediumQuality]) {
-			// Create Export session
-			AVAssetExportSession *exportSession = [[AVAssetExportSession alloc]initWithAsset:avAsset presetName:AVAssetExportPresetMediumQuality];
-
-			// Creating temp path to save the converted video
-			
-			// NSString* documentsDirectory = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) objectAtIndex:0];
-			// use temp directory
-			
-			NSString* tempDirectory = NSTemporaryDirectory();
-			
-			NSString* myDocumentPath = [tempDirectory stringByAppendingPathComponent:@"capturedVideo.mp4"];
-			NSURL *url = [[NSURL alloc] initFileURLWithPath:myDocumentPath];
-
-			// Check if the file already exists then remove the previous file
-			if ([[NSFileManager defaultManager]fileExistsAtPath:myDocumentPath]) {
-				[[NSFileManager defaultManager]removeItemAtPath:myDocumentPath error:nil];
-			}
-		
-			NSLog(@"Creating export file: %@",myDocumentPath);
-			
-			exportSession.outputURL = url;
-		
-			// Set the output file format, etc.
-			exportSession.outputFileType = AVFileTypeMPEG4;
-			exportSession.shouldOptimizeForNetworkUse = YES;
-		
-			[exportSession exportAsynchronouslyWithCompletionHandler:^{
-			
-				switch ([exportSession status])	{
-					case AVAssetExportSessionStatusFailed:
-						NSLog(@"Video export session failed");
-						[self conversionFailedOrCanceled:callbackId];
-						break;
-					case AVAssetExportSessionStatusCancelled:
-						NSLog(@"Video export canceled");
-						[self conversionFailedOrCanceled:callbackId];
-						break;
-					case AVAssetExportSessionStatusCompleted:
-						//Video conversion finished
-						NSLog(@"Video MPEG compression export successful!");
-						[self processVideo:myDocumentPath forCallbackId:callbackId];
-						break;
-					default:
-						break;
-				}
-			}];
-		}
-		else {
-			NSLog(@"Video file not supported!");
-		}
-	}];
-}
-
-
 - (void)imagePickerController:(UIImagePickerController*)picker didFinishPickingImage:(UIImage*)image editingInfo:(NSDictionary*)editingInfo
 {
     // older api calls new one
@@ -570,9 +531,14 @@
 }
 
 /* Called when image/movie is finished recording.
-*  Calls convertToMpeg for quicktime mov to mpeg conversion
-*/
-
+ * Calls success or error code as appropriate
+ * if successful, result  contains an array (with just one entry since can only get one image unless build own camera UI) of MediaFile object representing the image
+ *      name
+ *      fullPath
+ *      type
+ *      lastModifiedDate
+ *      size
+ */
 - (void)imagePickerController:(UIImagePickerController*)picker didFinishPickingMediaWithInfo:(NSDictionary*)info
 {
     CDVImagePicker* cameraPicker = (CDVImagePicker*)picker;
@@ -597,19 +563,17 @@
         // mediaType was image
         result = [self processImage:image type:cameraPicker.mimeType forCallbackId:callbackId];
     } else if ([mediaType isEqualToString:(NSString*)kUTTypeMovie]) {
-		
-		// convert video
+        // process video
         NSString* moviePath = [(NSURL *)[info objectForKey:UIImagePickerControllerMediaURL] path];
         if (moviePath) {
-		
-			// convert to MPEG
-			// Note: covertVideoToMpeg will send plugin result within completion block
-			
-			[self convertVideoToMpeg:moviePath withCallbackId:callbackId];
-		}
+            result = [self processVideo:moviePath forCallbackId:callbackId];
+        }
     }
-	[[picker presentingViewController] dismissViewControllerAnimated:YES completion:nil];
-	pickerController = nil;
+    if (!result) {
+        result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageToErrorObject:CAPTURE_INTERNAL_ERR];
+    }
+    [self.commandDelegate sendPluginResult:result callbackId:callbackId];
+    pickerController = nil;
 }
 
 - (void)imagePickerControllerDidCancel:(UIImagePickerController*)picker
@@ -628,19 +592,11 @@
 
 @implementation CDVAudioNavigationController
 
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 90000
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations
 {
     // delegate to CVDAudioRecorderViewController
     return [self.topViewController supportedInterfaceOrientations];
 }
-#else
-- (NSUInteger)supportedInterfaceOrientations
-{
-    // delegate to CVDAudioRecorderViewController
-    return [self.topViewController supportedInterfaceOrientations];
-}
-#endif
 
 @end
 
@@ -692,9 +648,9 @@
 	if ([self respondsToSelector:@selector(edgesForExtendedLayout)]) {
         self.edgesForExtendedLayout = UIRectEdgeNone;
     }
-    
+
     // create view and display
-    CGRect viewRect = [[UIScreen mainScreen] applicationFrame];
+    CGRect viewRect = [[UIScreen mainScreen] bounds];
     UIView* tmp = [[UIView alloc] initWithFrame:viewRect];
 
     // make backgrounds
@@ -705,7 +661,8 @@
         microphoneResource = @"CDVCapture.bundle/microphone-568h";
     }
 
-    UIImage* microphone = [UIImage imageNamed:[self resolveImageResource:microphoneResource]];
+    NSBundle* cdvBundle = [NSBundle bundleForClass:[CDVCapture class]];
+    UIImage* microphone = [UIImage imageNamed:[self resolveImageResource:microphoneResource] inBundle:cdvBundle compatibleWithTraitCollection:nil];
     UIView* microphoneView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, viewRect.size.width, microphone.size.height)];
     [microphoneView setBackgroundColor:[UIColor colorWithPatternImage:microphone]];
     [microphoneView setUserInteractionEnabled:NO];
@@ -713,7 +670,7 @@
     [tmp addSubview:microphoneView];
 
     // add bottom bar view
-    UIImage* grayBkg = [UIImage imageNamed:[self resolveImageResource:@"CDVCapture.bundle/controls_bg"]];
+    UIImage* grayBkg = [UIImage imageNamed:[self resolveImageResource:@"CDVCapture.bundle/controls_bg"] inBundle:cdvBundle compatibleWithTraitCollection:nil];
     UIView* controls = [[UIView alloc] initWithFrame:CGRectMake(0, microphone.size.height, viewRect.size.width, grayBkg.size.height)];
     [controls setBackgroundColor:[UIColor colorWithPatternImage:grayBkg]];
     [controls setUserInteractionEnabled:NO];
@@ -721,7 +678,7 @@
     [tmp addSubview:controls];
 
     // make red recording background view
-    UIImage* recordingBkg = [UIImage imageNamed:[self resolveImageResource:@"CDVCapture.bundle/recording_bg"]];
+    UIImage* recordingBkg = [UIImage imageNamed:[self resolveImageResource:@"CDVCapture.bundle/recording_bg"] inBundle:cdvBundle compatibleWithTraitCollection:nil];
     UIColor* background = [UIColor colorWithPatternImage:recordingBkg];
     self.recordingView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, viewRect.size.width, recordingBkg.size.height)];
     [self.recordingView setBackgroundColor:background];
@@ -735,12 +692,7 @@
     // timerLabel.autoresizingMask = reSizeMask;
     [self.timerLabel setBackgroundColor:[UIColor clearColor]];
     [self.timerLabel setTextColor:[UIColor whiteColor]];
-#ifdef __IPHONE_6_0
     [self.timerLabel setTextAlignment:NSTextAlignmentCenter];
-#else
-    // for iOS SDK < 6.0
-    [self.timerLabel setTextAlignment:UITextAlignmentCenter];
-#endif
     [self.timerLabel setText:@"0:00"];
     [self.timerLabel setAccessibilityHint:PluginLocalizedString(captureCommand, @"recorded time in minutes and seconds", nil)];
     self.timerLabel.accessibilityTraits |= UIAccessibilityTraitUpdatesFrequently;
@@ -749,8 +701,8 @@
 
     // Add record button
 
-    self.recordImage = [UIImage imageNamed:[self resolveImageResource:@"CDVCapture.bundle/record_button"]];
-    self.stopRecordImage = [UIImage imageNamed:[self resolveImageResource:@"CDVCapture.bundle/stop_button"]];
+    self.recordImage = [UIImage imageNamed:[self resolveImageResource:@"CDVCapture.bundle/record_button"] inBundle:cdvBundle compatibleWithTraitCollection:nil];
+    self.stopRecordImage = [UIImage imageNamed:[self resolveImageResource:@"CDVCapture.bundle/stop_button"] inBundle:cdvBundle compatibleWithTraitCollection:nil];
     self.recordButton.accessibilityTraits |= [self accessibilityTraits];
     self.recordButton = [[UIButton alloc] initWithFrame:CGRectMake((viewRect.size.width - recordImage.size.width) / 2, (microphone.size.height + (grayBkg.size.height - recordImage.size.height) / 2), recordImage.size.width, recordImage.size.height)];
     [self.recordButton setAccessibilityLabel:PluginLocalizedString(captureCommand, @"toggle audio recording", nil)];
@@ -815,30 +767,13 @@
     }
 }
 
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 90000
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations
 {
     UIInterfaceOrientationMask orientation = UIInterfaceOrientationMaskPortrait;
     UIInterfaceOrientationMask supported = [captureCommand.viewController supportedInterfaceOrientations];
-    
-    orientation = orientation | (supported & UIInterfaceOrientationMaskPortraitUpsideDown);
-    return orientation;
-}
-#else
-- (NSUInteger)supportedInterfaceOrientations
-{
-    NSUInteger orientation = UIInterfaceOrientationMaskPortrait; // must support portrait
-    NSUInteger supported = [captureCommand.viewController supportedInterfaceOrientations];
-    
-    orientation = orientation | (supported & UIInterfaceOrientationMaskPortraitUpsideDown);
-    return orientation;
-}
-#endif
 
-- (void)viewDidUnload
-{
-    [self setView:nil];
-    [self.captureCommand setInUse:NO];
+    orientation = orientation | (supported & UIInterfaceOrientationMaskPortraitUpsideDown);
+    return orientation;
 }
 
 - (void)processButton:(id)sender
@@ -856,7 +791,7 @@
         __block NSError* error = nil;
 
         __weak CDVAudioRecorderViewController* weakSelf = self;
-        
+
         void (^startRecording)(void) = ^{
             [weakSelf.avSession setCategory:AVAudioSessionCategoryRecord error:&error];
             [weakSelf.avSession setActive:YES error:&error];
@@ -867,7 +802,7 @@
             } else {
                 if (weakSelf.duration) {
                     weakSelf.isTimed = true;
-                    [weakSelf.avRecorder recordForDuration:[duration doubleValue]];
+                    [weakSelf.avRecorder recordForDuration:[weakSelf.duration doubleValue]];
                 } else {
                     [weakSelf.avRecorder record];
                 }
@@ -877,7 +812,7 @@
             }
             UIAccessibilityPostNotification(UIAccessibilityLayoutChangedNotification, nil);
         };
-        
+
         SEL rrpSel = NSSelectorFromString(@"requestRecordPermission:");
         if ([self.avSession respondsToSelector:rrpSel])
         {
@@ -921,7 +856,7 @@
         //BOOL isUIAccessibilityAnnouncementNotification = (&UIAccessibilityAnnouncementNotification != NULL);
         if (UIAccessibilityAnnouncementNotification) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500ull * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                    UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, PluginLocalizedString(captureCommand, @"timed recording complete", nil));
+                UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, PluginLocalizedString(self->captureCommand, @"timed recording complete", nil));
                 });
         }
     } else {
@@ -947,10 +882,6 @@
     UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification, nil);
     // return result
     [self.captureCommand.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
-
-    if (IsAtLeastiOSVersion(@"7.0")) {
-        [[UIApplication sharedApplication] setStatusBarStyle:_previousStatusBarStyle];
-    }
 }
 
 - (void)updateTime
@@ -999,20 +930,6 @@
     NSLog(@"error recording audio");
     self.pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_IO_EXCEPTION messageToErrorObject:CAPTURE_INTERNAL_ERR];
     [self dismissAudioView:nil];
-}
-
-- (UIStatusBarStyle)preferredStatusBarStyle
-{
-    return UIStatusBarStyleDefault;
-}
-
-- (void)viewWillAppear:(BOOL)animated
-{
-    if (IsAtLeastiOSVersion(@"7.0")) {
-        [[UIApplication sharedApplication] setStatusBarStyle:[self preferredStatusBarStyle]];
-    }
-
-    [super viewWillAppear:animated];
 }
 
 @end
